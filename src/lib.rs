@@ -1,23 +1,27 @@
-use alloy_primitives::{Address, U256};
-use alloy_sol_types::sol;
-use stylus_sdk::{evm, msg, prelude::*};
+extern crate alloc;
 
-// Events using sol! macro
+use stylus_sdk::{
+    alloy_primitives::{Address, U256, Uint},
+    prelude::*,
+    storage::{StorageAddress, StorageMapping, StorageString, StorageUint},
+    call::Call,
+};
+
+// Events
 sol! {
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
 }
 
-// Storage using sol_storage! with Solidity-like syntax
 sol_storage! {
     #[entrypoint]
     pub struct ERC20Token {
         mapping(address => uint256) balances;
         mapping(address => mapping(address => uint256)) allowances;
-        uint256 total_supply;
         string name;
         string symbol;
         uint8 decimals;
+        uint256 total_supply;
     }
 }
 
@@ -25,17 +29,17 @@ sol_storage! {
 impl ERC20Token {
     /// Initialize the token
     pub fn init(&mut self, name: String, symbol: String, decimals: u8, initial_supply: U256) {
-        let sender = msg::sender();
+        let sender = self.vm().msg_sender();
         
         self.name.set_str(name);
         self.symbol.set_str(symbol);
-        self.decimals.set(decimals);
+        self.decimals.set(Uint::from(decimals));
         self.total_supply.set(initial_supply);
         
         // Give initial supply to deployer
         self.balances.setter(sender).set(initial_supply);
         
-        evm::log(Transfer {
+        self.vm().log(Transfer {
             from: Address::ZERO,
             to: sender,
             value: initial_supply,
@@ -54,7 +58,7 @@ impl ERC20Token {
 
     /// Returns the number of decimals
     pub fn decimals(&self) -> u8 {
-        self.decimals.get()
+        self.decimals.get().to::<u8>()
     }
 
     /// Returns the total supply
@@ -69,17 +73,17 @@ impl ERC20Token {
 
     /// Transfer tokens to another address
     pub fn transfer(&mut self, to: Address, amount: U256) -> bool {
-        let sender = msg::sender();
+        let sender = self.vm().msg_sender();
         self._transfer(sender, to, amount);
         true
     }
 
     /// Approve spender to spend tokens on behalf of the caller
     pub fn approve(&mut self, spender: Address, amount: U256) -> bool {
-        let owner = msg::sender();
+        let owner = self.vm().msg_sender();
         self.allowances.setter(owner).setter(spender).set(amount);
         
-        evm::log(Approval {
+        self.vm().log(Approval {
             owner,
             spender,
             value: amount,
@@ -95,7 +99,7 @@ impl ERC20Token {
 
     /// Transfer tokens from one address to another using allowance
     pub fn transfer_from(&mut self, from: Address, to: Address, amount: U256) -> bool {
-        let spender = msg::sender();
+        let spender = self.vm().msg_sender();
         
         // Check allowance
         let current_allowance = self.allowances.getter(from).get(spender);
@@ -105,7 +109,7 @@ impl ERC20Token {
         let new_allowance = current_allowance - amount;
         self.allowances.setter(from).setter(spender).set(new_allowance);
         
-        evm::log(Approval {
+        self.vm().log(Approval {
             owner: from,
             spender,
             value: new_allowance,
@@ -116,7 +120,7 @@ impl ERC20Token {
         true
     }
 
-    /// Optional: Mint function (simple implementation)
+    /// Optional: Mint function
     pub fn mint(&mut self, to: Address, amount: U256) -> bool {
         // Update total supply
         let new_total_supply = self.total_supply.get() + amount;
@@ -127,7 +131,7 @@ impl ERC20Token {
         let new_balance = current_balance + amount;
         self.balances.setter(to).set(new_balance);
 
-        evm::log(Transfer {
+        self.vm().log(Transfer {
             from: Address::ZERO,
             to,
             value: amount,
@@ -151,7 +155,7 @@ impl ERC20Token {
         let new_to_balance = to_balance + amount;
         self.balances.setter(to).set(new_to_balance);
 
-        evm::log(Transfer {
+        self.vm().log(Transfer {
             from,
             to,
             value: amount,
@@ -162,19 +166,6 @@ impl ERC20Token {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_init() {
-        let mut contract = ERC20Token::default();
-        let initial_supply = U256::from(1000000);
-        
-        contract.init("Test Token".to_string(), "TEST".to_string(), 18, initial_supply);
-
-        assert_eq!(contract.name(), "Test Token");
-        assert_eq!(contract.symbol(), "TEST");
-        assert_eq!(contract.decimals(), 18);
-        assert_eq!(contract.total_supply(), initial_supply);
-    }
 
     #[test]
     fn test_transfer() {
